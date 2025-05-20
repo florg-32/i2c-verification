@@ -1,0 +1,1 @@
+MODELSIM_PATH=vsim

@@ -1,0 +1,18 @@
+[libraries]
+  osvvm/Common/src/*.vhd = "osvvm_common"
+  osvvm/osvvm/*.vhd = "osvvm"
+  osvvm/UART/src/*.vhd = "osvvm_uart"
+  common/*.vhd = "common_lib"
+
+[excludes]
+  **/osvvm/osvvm/MemoryPkg_2019.vhd = true
+  **/osvvm/AXI4/** = true
+  **/osvvm/Documentation/** = true
+  **/osvvm/Script/** = true
+  **/osvvm/UART/** = true
+  
+[settings]
+  V4p.Settings.Formatting.Indentation.TabWidth = 2
+  V4p.Settings.Formatting.Indentation.UseTabs = false
+  V4p.Settings.Formatting.Vhdl.StandardLibraryStyle = Lower
+  V4p.Settings.Basics.LogSeverity = Detail
