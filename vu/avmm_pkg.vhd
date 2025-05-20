@@ -40,11 +40,12 @@ package body avmm_pkg is
   end procedure;
 
   procedure AvmmReadModifyWrite(signal trans: inout AddressBusRecType; addr, data, write_mask: std_logic_vector) is
-    variable read_data: std_logic_vector;
+    variable read_data: std_logic_vector(trans.DataFromModel'range);
+    variable byteenable_bits: integer := trans.DataFromModel'high / 8;
   begin
     -- Using byteenable would mean we cannot support write_masks that are not byte aligned
-    AvmmRead(trans, addr, (others => '1'), read_data);
-    AvmmWrite(trans, addr, (data and write_mask) or (read_data and not write_mask), (others => '1'));
+    AvmmRead(trans, addr, (byteenable_bits downto 0 => '1'), read_data);
+    AvmmWrite(trans, addr, (data and write_mask) or (read_data and not write_mask), (trans.DataFromModel'range => '1'));
   end procedure;
 
 end package body;
