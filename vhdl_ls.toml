@@ -1,0 +1,18 @@
+[libraries]
+osvvm_common.files = [
+    "osvvm/Common/src/*.vhd"
+]
+osvvm_common.is_third_party = true
+osvvm.files = [
+    "osvvm/osvvm/*.vhd"
+]
+osvvm.is_third_party = true
+common_lib.files = [
+    "common/*.vhd"
+]
+
+defaultlib.files = [
+    "vu/*.vhd",
+    "sim/*.vhd",
+    "dut/*.vhd"
+]
