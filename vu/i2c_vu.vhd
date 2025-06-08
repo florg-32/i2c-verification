@@ -28,6 +28,8 @@ architecture rtl of i2c_vu is
   signal write_request_count, write_done_count: integer := 0;
   signal read_request_count, read_done_count: integer := 0;
 
+  signal busy: std_logic := '0';
+
 begin
 
   initializer_p: process
@@ -136,6 +138,8 @@ begin
     wait until falling_edge(pins_io.sda);
     Log("Start condition");
 
+    busy <= '1';
+
     for i in received.address'range loop
       wait until rising_edge(pins_io.scl);
       received.address(i) := pins_io.sda;
@@ -182,6 +186,9 @@ begin
       -- STOP condition
       wait until rising_edge(pins_io.scl);
       wait until rising_edge(pins_io.sda);
+      
+      busy <= '1';
+
 
     else
       Log("Write request for " & to_hex_string(stimulus.address));
@@ -225,6 +232,76 @@ begin
       end if;
     end if;
 
+  end process;
+
+  timing_checks: process(pins_io.scl, pins_io.sda, busy)
+    variable transaction_start : time;
+    variable transaction_stop : time;
+    variable scl_rising : time;
+    variable scl_falling: time;
+    variable sda_rising: time;
+    variable sda_falling: time;
+    variable t_low, t_high, t_hda_sta, t_su_sta, t_su_sto, t_su_dat, t_buf: time;
+    variable newly_started : boolean := false;
+  begin
+    -- Calculate the time slots
+    if rising_edge(pins_io.scl) then
+      scl_rising := now;
+      newly_started := false;
+
+
+      --if busy = '1' then -- maybe not needed, no transition on scl when not busy(?)
+      t_low := scl_rising - scl_falling;
+      if sda_falling > sda_rising then
+        t_su_dat:= scl_rising - sda_falling;
+      else 
+        t_su_dat:=scl_rising - sda_rising;
+        end if;
+      --end if;
+
+    end if;
+
+    if rising_edge(pins_io.sda) then
+      sda_rising := now;
+    end if;
+
+    if falling_edge(pins_io.scl) then
+      scl_falling := now;
+      --if busy = '1' then -- maybe not needed, no transition on scl when not busy(?)
+      t_high := scl_falling - scl_rising;
+      --end if;
+      if newly_started then
+        t_hda_sta := scl_falling - sda_falling;
+      end if;
+    end if;
+
+    if falling_edge(pins_io.sda) then
+      sda_rising := now;
+    end if;
+
+    if rising_edge(busy) then
+      transaction_start := now;
+      newly_started := true;
+      t_buf := transaction_start - transaction_stop;
+      t_su_sta := transaction_start - scl_rising;
+    end if;
+
+    if falling_edge(busy) then
+      transaction_stop := now;
+      t_su_sto := transaction_stop - scl_rising;
+
+    end if;
+
+  -- Alert if not up to specification
+  if now > 0 ns then
+    AffirmIf(t_low > 1.3 us, "I2C-022 Violated: t_low = " & time'image(t_low));
+    AffirmIf(t_high > 0.6 us, "I2C-023 Violated: t_high = " & time'image(t_high));
+    AffirmIf(t_hda_sta > 0.6 us, "I2C-024 Violated: t_hda_sta = " & time'image(t_hda_sta));
+    AffirmIf(t_su_sta > 0.6 us, "I2C-025 Violated: t_su_sta = " & time'image(t_su_sta));
+    AffirmIf(t_su_sto > 0.6 us, "I2C-026 Violated: t_su_sto = " & time'image(t_su_sto));
+    AffirmIf(t_su_dat > 100 ns, "I2C-027 Violated: t_low = " & time'image(t_su_dat));
+    AffirmIf(t_buf > 1.3 us, "I2C-028 Violated: t_low = " & time'image(t_buf));
+  end if; 
   end process;
 
 end architecture;
