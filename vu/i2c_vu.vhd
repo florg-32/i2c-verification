@@ -1,7 +1,7 @@
 --! This VU treats read and write operations as seen from master, meaning a WRITE_OP expects the master to write data
 --! and compares it against what it is provided
 
-library ieee;
+  library ieee;
   use ieee.std_logic_1164.all;
   use ieee.numeric_std.all;
   use work.i2c_pkg.all;
@@ -28,6 +28,8 @@ architecture rtl of i2c_vu is
   signal write_request_count, write_done_count: integer := 0;
   signal read_request_count, read_done_count: integer := 0;
 
+  signal busy: std_logic := '0';
+  signal start_event, sr_event, stop_event, data_event: std_logic := '0';
 begin
 
   initializer_p: process
@@ -89,6 +91,60 @@ begin
     end loop;
   end process;
 
+  i2c_events: process
+    variable setup_hold: time;
+  begin
+    wait until pins_io.sda = '0' and pins_io.scl = 'Z' and pins_io.sda'event;
+    AffirmIf(now - pins_io.sda'last_event >= 1.3 us, "T-018 failed; tBuf too short");
+
+    stop_event <= '0';
+    start_event <= '1';
+    setup_hold := now;
+
+    wait until pins_io.sda = '0' and pins_io.scl = '0' and pins_io.scl'event;
+    AffirmIf(now - setup_hold >= 0.6 us, "T-014 failed; start hold too short");
+
+    loop
+      wait until pins_io.scl'event and pins_io.scl = 'Z';
+      AffirmIf(now - pins_io.sda'last_event >= 100 ns, "T-017 failed; SDA setup too short"); -- safe to assert always, as SR/STOP setup is way longer
+      sr_event <= '0';
+      data_event <= pins_io.sda;
+      setup_hold := now;
+      wait until (pins_io.scl'event and pins_io.scl = '0') or pins_io.sda'event;
+
+      if pins_io.sda'event and pins_io.sda = '0' then
+        -- repeated start
+        AffirmIf(now - setup_hold >= 0.6 us, "T-015 failed; repeated start setup too short");
+        sr_event <= '1';
+        setup_hold := now;
+        wait until pins_io.scl'event and pins_io.scl = '0';
+        AffirmIf(now - setup_hold >= 0.6 us, "T-015 failed; repeated start hold too short");
+      elsif pins_io.sda'event and pins_io.sda = 'Z' then
+        -- stop
+        AffirmIf(now - setup_hold >= 0.6 us, "T-014 failed; stop setup too short");
+        stop_event <= '1';
+        exit;
+      end if;
+    end loop;
+
+    start_event <= '0';
+  end process;
+
+  i2c_scl_period: process
+    variable event: time;
+  begin
+    wait until pins_io.scl'event;
+    loop
+      event := now;
+      wait until pins_io.scl'event;
+      if pins_io.scl = '0' then
+        AffirmIf(now - event >= 0.6 us, "T-016 failed; SCL HIGH too short");
+      else
+        AffirmIf(now - event >= 1.3 us, "T-016 failed; SCL LOW too short");
+      end if;
+    end loop;
+  end process;
+
   i2c_p: process
     procedure transmit_bit(val: std_logic) is
     begin
@@ -108,48 +164,37 @@ begin
       transmit_bit('1');
     end procedure;
 
-    procedure read_bit (variable val: out std_logic; variable is_stop: out boolean) is
+    procedure read_bit (variable val: out std_logic; variable is_stop, is_sr: out boolean) is
     begin
-      wait until falling_edge(pins_io.scl);
-
-      if pins_io.sda = '0' then
-        wait until rising_edge(pins_io.scl);
-        val := '1' when pins_io.sda = 'Z' else pins_io.sda;
-
-        wait until falling_edge(pins_io.scl) or rising_edge(pins_io.sda);
-        if pins_io.scl = 'Z' and pins_io.sda = 'Z' then
-          is_stop := TRUE;
-        end if;
-      else
-        wait until rising_edge(pins_io.scl);
-        val := '1' when pins_io.sda = 'Z' else pins_io.sda;
-        is_stop := FALSE;
-      end if;
+      wait until data_event'transaction'event or rising_edge(sr_event) or rising_edge(stop_event);
+      val := data_event;
+      is_stop := rising_edge(stop_event);
+      is_sr := rising_edge(sr_event);
     end procedure;
 
     variable stimulus: I2cStim;
     variable received: I2cStim;
     variable is_read: std_logic;
     variable master_ack: std_logic;
-    variable is_stop: boolean;
+    variable is_stop, is_sr: boolean;
   begin
-    wait until falling_edge(pins_io.sda);
-    Log("Start condition");
+    if pins_io.sda = 'Z' and pins_io.scl = 'Z' then
+      wait until rising_edge(start_event);
+    end if;
 
     for i in received.address'range loop
-      wait until rising_edge(pins_io.scl);
-      received.address(i) := pins_io.sda;
+      read_bit(received.address(i), is_stop, is_sr);
     end loop;
-    read_bit(is_read, is_stop);
+    read_bit(is_read, is_stop, is_sr);
 
-    if is_read then
+    if is_read = 'Z' then
       Log("Read request for " & to_hex_string(stimulus.address));
       if Empty(read_queue) then
         transmit_nack;
       else
         (stimulus.address, stimulus.data) := Peek(read_queue);
         if received.address /= stimulus.address then
-          Log("Invalid address, expected " & to_hex_string(stimulus.address) & " got " & to_hex_string(received.address));
+          Alert("Invalid address, expected " & to_hex_string(stimulus.address) & " got " & to_hex_string(received.address));
           transmit_nack;
         else
           transmit_ack;
@@ -168,7 +213,7 @@ begin
                   transmit_bit(stimulus.data(i));
                 end loop;
 
-                read_bit(master_ack, is_stop);
+                read_bit(master_ack, is_stop, is_sr);
                 Increment(read_done_count);
                 if master_ack /= '0' then
                   exit burst_read;
@@ -176,12 +221,11 @@ begin
               end if;
             end if;
           end loop;
+
         end if;
       end if;
 
-      -- STOP condition
-      wait until rising_edge(pins_io.scl);
-      wait until rising_edge(pins_io.sda);
+      wait until rising_edge(stop_event);
 
     else
       Log("Write request for " & to_hex_string(stimulus.address));
@@ -198,8 +242,8 @@ begin
 
           burst_write: loop
             for i in received.data'range loop
-              read_bit(received.data(i), is_stop);
-              if is_stop then
+              read_bit(received.data(i), is_stop, is_sr);
+              if is_stop or is_sr then
                 exit burst_write;
               end if;
             end loop;
@@ -221,6 +265,7 @@ begin
               end if;
             end if;
           end loop;
+
         end if;
       end if;
     end if;
