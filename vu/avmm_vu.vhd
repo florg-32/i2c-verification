@@ -27,7 +27,7 @@ begin
       case trans_io.Operation is
         when WRITE_OP =>
           pins_io.address <= SafeResize(trans_io.address, pins_io.address'length);
-          pins_io.writedata <= SafeResize(trans_io.DataToModel, pins_io.address'length);
+          pins_io.writedata <= SafeResize(trans_io.DataToModel, pins_io.writedata'length);
           pins_io.byteenable <= std_logic_vector(to_unsigned(trans_io.IntToModel, pins_io.byteenable'length));
           pins_io.write <= '1';
 
